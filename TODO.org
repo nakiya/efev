@@ -1,0 +1,7 @@
+* DOING
+  * Parser [0/3]
+    - [ ] Combine statements into program
+    - [ ] Run simultaneous evaluation of all statements.
+      * Single pass or multiple?
+    - [ ] Add REST API
+      - [ ] Add swagger
