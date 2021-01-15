@@ -1,13 +1,15 @@
 (ns duminda.efev
   (:require [instaparse.core :as insta]
-            [clojure.edn :as edn]))
+            [clojure.edn :as edn]
+            [com.stuartsierra.dependency :as dep]
+            [clojure.walk :refer [prewalk postwalk]]))
 
 ;;Incomplete. But this suffices as a PoC
 (def formula-grammar
                                         ;;;from here and modified: https://notebooks.gesis.org/binder/jupyter/user/bhugueney-binder-test-y69wi9ts/notebooks/Clojure.ipynb : lang0-parser
                                         ;;;number regex here: https://stackoverflow.com/questions/2811031/decimal-or-numeric-values-in-regular-expression-validation/39399503#39399503
   "prog = stmt+;
-    stmt = spaces cellref-assign spaces <'='> spaces expr spaces <';'>;
+    stmt = spaces cellref spaces <'='> spaces expr spaces <';'>;
     <expr> = add-sub;
     <add-sub> = mult-div | add | sub;
     add = add-sub spaces <'+'> spaces mult-div;
@@ -18,7 +20,6 @@
     <factor> = funcall | number | cellref | <'('> spaces expr spaces <')'>;
     <spaces> = <#'\\s*'>;
     number = #'^[-~]?(0|[1-9]\\d*)?(\\.\\d+)?(?<=\\d)';
-    cellref-assign = colid <'.'> rowid;
     cellref = colid <'.'> rowid;
     <rowid> = #'[0-9]+' | ident;
     <colid> = ident;
@@ -32,6 +33,7 @@
 
 (comment
   (formula-parser "2 + 3 / 5" :trace true)
+  (formula-parser "A.1 = 2 + 3;")
   (formula-parser "A.1 = 2 + 3; B.1 = A.1 + 2;")
   (insta/disable-tracing!)
   ,)
@@ -97,7 +99,8 @@
 (comment
   (expand-range [:cellref "A" "1"] [:cellref "B" "1"])
   (expand-range [:cellref "B" "2"] [:cellref "A" "11"])
-  (expand-range [:cellref "B" "1"] [:cellref "A" "3"]))
+  (expand-range [:cellref "B" "1"] [:cellref "A" "3"])
+  ,)
 
 (def transform-map {:number    edn/read-string
                     :add       +        :sub   - :mult * :div /
@@ -115,4 +118,59 @@
 (comment
   (insta/transform transform-map (formula-parser "A.1 = SQRT(SUM(A.1:B.3) + 24);"))
   (insta/transform transform-map (formula-parser "B.1 = SUM(A.1, A.2, B.1, B.2) * 12;"))
-  )
+  ,)
+
+(comment
+  (def g1 (-> (dep/graph)
+              (dep/depend :b :a)
+              (dep/depend :c :b)
+              (dep/depend :c :a)
+              (dep/depend :d :c)))
+
+  (dep/topo-sort g1)
+
+  ,)
+
+(comment
+  (formula-parser "A.1 = 2 + 3; B.1 = A.1 + 2;")
+;; => [:prog [:stmt [:cellref "A" "1"] [:add [:number "2"] [:number "3"]]] [:stmt [:cellref "B" "1"] [:add [:cellref "A" "1"] [:number "2"]]]]
+
+  (tree-seq (fn [node]
+              (println node)
+              (if (vector? node)
+                (not= (first node) :cellref)
+                false)) seq
+            [:stmt [:cellref "B" "1"] [:add [:cellref "A" "1"] [:number "2"]]])
+
+  (->> '( 2 (7 nil nil) (88 (5 nil nil) nil) )
+       (tree-seq list? rest))
+  ,)
+
+(defmulti get-dependencies first)
+
+(defmethod get-dependencies :stmt [[_ assign-cell expr]]
+  [assign-cell (filter #(and (vector? %) (= :cellref (first %)))
+                       (tree-seq (fn [node]
+                                   (if (vector? node)
+                                     (not= (first node) :cellref)
+                                     false)) seq expr))])
+
+(defmethod get-dependencies :prog [prog]
+  (map get-dependencies
+       (filter #(= :stmt (and (vector? %) (first %))) prog)))
+
+(defn get-eval-order [parse-tree]
+  (->> (get-dependencies parse-tree)
+       (mapcat (fn [[assign-cell dep-cells]]
+                 (map (fn [d] (vector assign-cell d)) dep-cells)))
+       (remove empty?)
+       (reduce (fn [g [a b]] (dep/depend g a b)) (dep/graph))
+       (dep/topo-sort)))
+
+(comment
+  (get-dependencies [:stmt [:cellref "B" "1"] [:add [:cellref "A" "1"] [:number "2"]]])
+  (get-eval-order
+    (formula-parser "A.1 = 2; A.2 = A.1 + 5; B.1 = A.1 + A.2; B.2 = B.1;"))
+;; => #com.stuartsierra.dependency.MapDependencyGraph{:dependencies {[:cellref "A" "2"] #{[:cellref "A" "1"]}, [:cellref "B" "1"] #{[:cellref "A" "1"] [:cellref "A" "2"]}, [:cellref "B" "2"] #{[:cellref "B" "1"]}}, :dependents {[:cellref "A" "1"] #{[:cellref "A" "2"] [:cellref "B" "1"]}, [:cellref "A" "2"] #{[:cellref "B" "1"]}, [:cellref "B" "1"] #{[:cellref "B" "2"]}}}
+
+  ,)
