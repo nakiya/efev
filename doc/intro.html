@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml">
+
+<head>
+<title>intro.html</title>
+<meta http-equiv="Content-Type" content="text/html;charset=utf-8"/>
+
+</head>
+
+<body>
+
+<h1>efev - An Introduction</h1>
+
+<h2>Problem:</h2>
+
+<p>Create a web grid demo focusing on formula evaluation. Following are the aspects with which this demo is concerned.</p>
+
+<ol>
+<li><p>Present to user with a js/react/whatever grid to input data into. Ideally, this should have dimensions of 15 x 26. We can use a smaller grid at the beginning.</p></li>
+<li><p>User should be able to input strings into each cell (except row/col headers). These strings can represent numbers <code>(42, 3.14, ...)</code>, strings <code>("Hello", ...)</code> or formulas <code>(= 1 + 2.4, =SQRT(SUM(3,5,6)))</code>. These formulas can include cell references like this: <code>=A.2 + 23</code>. In the previous formula, there's a reference to the value in the cell identified by row 1 and column 'A'. Formulas can also include cell range references like this: <code>=SUM(A.2:A.6)</code>. The previous formula designates a sum of the values for cells between and including <code>A.2</code> and <code>A.6</code>. In addition to this, formulas can include operators <code>(+,-,*,/,%,~,...)</code> and custom functions <code>(SUM, SQRT, SIN, CONCATENATE, ...)</code>. (There are a host of other UI functionalities related to cell editing that we will not cover here. We are only concerned about the logic of formula evaluation.)</p></li>
+<li><p>There are options on when and where to evaluate formulas:</p>
+
+<ol>
+<li>Provide an "Evaluate" button to the user. User can edit multiple cells on a "dumb" grid and when he clicks on the button, evaluation for any and all formulas in the grid can happen. This evaluation can happen on the front end itself or at the back end. For the purpose of this demo, we will consider this option only.</li>
+<li>Evaluate formulas "as they happen". When a user enters a value into a cell, the front end would immediately try to evaluate it in case it's a formula. Optionally, we can consider doing this kind of immediate evaluation at back end though it may happen to be disruptive to the user experience.</li>
+</ol></li>
+</ol>
+
+<h2>Formula evaluation</h2>
+
+<p>We can think of the grid as a set of variables. A 2x2 grid having cells <code>A.1</code>, <code>A.2</code>, <code>B.1</code>, <code>B.2</code> can be represented with 4 variables having the same names. Hence, if these cells respectively contain the following values: <code>"2", "=A.1 + 5", "= SUM(A.1, A.2)", "= B.1"</code>, we can represent this grid with the following program:</p>
+
+<h4>Program-1</h4>
+
+<p><code>
+A.1 = 2;
+A.2 = A.1 + 5;
+B.1 = SUM(A.1, A.2);
+B.2 = B.1;
+</code></p>
+
+<p>(Let's ignore the mechanism with which we converted the cell value string in <code>A.1</code> into an integer and in <code>A.2</code> into a formula and so on for now.)</p>
+
+<p>This shows that the grid can be serialized as this program and can be sent back and forth among front end and back end. Additionally, this means that if we have a way, we can evaluate this program anywhere and figure out the cell values of the grid. Basically this is an exercise in interpreting a program.</p>
+
+<h3>Parsing</h3>
+
+<p>We use <a href="https://github.com/Engelberg/instaparse">instaparse library</a> for generating a parser to parse our formula language. The parser grammar at the moment of writing this document is below:</p>
+
+<p><code>
+"prog = assign+;
+    assign = spaces cellref spaces &lt;'='&gt; spaces expr spaces &lt;';'&gt;;
+    &lt;expr&gt; = add-sub;
+    &lt;add-sub&gt; = mult-div | add | sub;
+    add = add-sub spaces &lt;'+'&gt; spaces mult-div;
+    sub = add-sub spaces &lt;'-'&gt; spaces mult-div;
+    &lt;mult-div&gt; = factor | mult | div;
+    mult = mult-div spaces &lt;'*'&gt; spaces factor;
+    div = mult-div spaces &lt;'/'&gt; spaces factor;
+    &lt;factor&gt; = funcall | number | cellref | &lt;'('&gt; spaces expr spaces &lt;')'&gt;;
+    &lt;spaces&gt; = &lt;#'\\s*'&gt;;
+    number = #'^[-~]?(0|[1-9]\\d*)?(\\.\\d+)?(?&lt;=\\d)';
+    cellref = colid &lt;'.'&gt; rowid;
+    &lt;rowid&gt; = #'[0-9]+' | ident;
+    &lt;colid&gt; = ident;
+    &lt;ident&gt; = #'[a-zA-Z]\\w*';
+    &lt;funname&gt; = ident;
+    funcall = funname spaces &lt;'('&gt; arglist &lt;')'&gt; spaces;
+    arglist = (spaces expr spaces &lt;','&gt; spaces)* expr | cellrange | Epsilon;
+    cellrange = cellref &lt;':'&gt; cellref;"
+</code></p>
+
+<p>If we parse <a href="#Program-1">Program-1</a>, we get the following parse tree:</p>
+
+<p><img src="parse-tree.png" alt="" title="" /></p>
+
+<h3>Evaluation</h3>
+
+<p>We have the parse tree and now we should be able to evaluate this tree using a tree walking algorithm. But there's some issues:</p>
+
+<ol>
+<li>Cell references and cell range references mean that some cells have to be evalauated for value before others. There's an order of evaluation.</li>
+<li>We need to handle self references in formulas. i.e. <code>A.2 = A.2 + 5;</code></li>
+<li>We need to handle simple or complicated circular references between cells. i.e. <code>A.1 = A.2 + 3; A.2 = B.1 - 5; B.1 = A.1;</code></li>
+</ol>
+
+<p>This brings us to the first necessary step:</p>
+
+<h4>Topological sorting of cells</h4>
+
+<p>We need to find the topological ordering of cell references so we can evaluate each cell in that order. This can be done with a topological sorting algorithm. In our example, the cell reference dependencies are as below and have to be executed in that order. i.e. <code>A.1, A.2, B.1, B.2</code>.</p>
+
+<p>Topological sorting algorithms can detect cycles and self references. So, this algorithm would take care of those situations.</p>
+
+<p>For this demo, we use the <a href="https://github.com/stuartsierra/dependency">dependency library</a> for generating the topological sorting for cell references for a given program.</p>
+
+<p><img src="eval-order.png" alt="" title="" /></p>
+
+<h4>Evaluation</h4>
+
+<p>Once we have the parse tree and the cell evaluation order, evaluation has two main steps:</p>
+
+<ol>
+<li>Sort the cell assign statements (<code>assign</code> in parser) which are immediate children of the top level form <code>prog</code> according to the cell evaluation order we discovered.</li>
+<li>Evaluate each assign statement using a tree post-walk algorithm while keeping track of the cell value changes.</li>
+</ol>
+
+<p>This would present us with a new state for the grid. We can serialize this state and send back to the front end which in turn will display the new state.</p>
+
+</body>
+</html>
