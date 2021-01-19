@@ -1,9 +1,10 @@
-(ns duminda.efev
+(ns formularest.models.efev
   (:require [instaparse.core :as insta]
             [com.stuartsierra.dependency :as dep]
             [clojure.walk :refer [prewalk postwalk]]
             [rhizome.viz :as viz]
-            [clojure.set :as cs]))
+            [clojure.set :as cs]
+            [clojure.string :as str]))
 
 ;;Incomplete. But this suffices as a PoC
 ;;TODO: Doesn't handle strings yet. Do we need formulas with strings in them?
@@ -58,8 +59,7 @@
 (comment
   (expand-range [:cellref "A" "1"] [:cellref "B" "1"])
   (expand-range [:cellref "B" "2"] [:cellref "A" "11"])
-  (expand-range [:cellref "B" "1"] [:cellref "A" "3"])
-  ,)
+  (expand-range [:cellref "B" "1"] [:cellref "A" "3"]))
 
 (defn expand-range-inline [parse-tree]
   (->> parse-tree
@@ -78,22 +78,11 @@
   (formula-parser "A.1 = 5.3 + 3;")
   (formula-parser "A.1 = SUM(B.1:B.3);")
   (formula-parser "A.1 = SUM(B.1:D.4);")
-  (insta/disable-tracing!)
-  ,)
+  (insta/disable-tracing!))
 
 (comment
   (insta/visualize (formula-parser "A.1 = SQRT(SUM(78 + A.12) + B.22); B.1 = A.1 + 3;"))
   (insta/visualize (formula-parser "A.1 = 2; A.2 = A.1 + 5; B.1 = SUM(A.1, A.2); B.2 = B.1;"))
-  ;; (insta/visualize (formula-parser "SUM(1,2, 3 , SQRT(SUM(9,8))) + SUM()"))
-  ;; (insta/visualize (formula-parser "2 + 3 * (24 -5)"))
-  ;; (insta/visualize (formula-parser "2 + 3 / 5"))
-  ;; (insta/visualize (formula-parser "5 * 2 - 6"))
-  ;; (insta/visualize (formula-parser "SUM(A.1, A.2, B.1, B.2) * 12"))
-  ;; (insta/visualize (formula-parser "1.34 + 3.45"))
-  ;; (insta/visualize (formula-parser "-0.3 * .56 + -.7"))
-  ;; (insta/visualize (formula-parser "SUM(A.1:B.5)"))
-  ;; (insta/visualize (formula-parser "SUM(t2.Notional:t4.Notional)"))
-  ;; (insta/visualize (formula-parser "45 + ~34"))
   )
 
 
@@ -118,10 +107,8 @@
                 false)) seq
             [:assign [:cellref "B" "1"] [:add [:cellref "A" "1"] [:number "2"]]])
 
-  (->> '( 2 (7 nil nil) (88 (5 nil nil) nil) )
-       (tree-seq list? rest))
-
-  ,)
+  (->> '(2 (7 nil nil) (88 (5 nil nil) nil))
+       (tree-seq list? rest)))
 
 (defmulti get-dependencies first)
 
@@ -135,6 +122,9 @@
 (defmethod get-dependencies :prog [prog]
   (map get-dependencies
        (filter #(= :assign (and (vector? %) (first %))) prog)))
+
+;; (defmethod get-dependencies :default [something]
+;;   (throw (Exception. (str "get-dependencies default: " something))))
 
 (defn cell-deps [parse-tree]
   "Get cell dependencies"
@@ -168,17 +158,17 @@
 
 (comment
   (cell-deps
-    (formula-parser "A.1 = 2; A.2 = A.1 + 5; B.1 = SUM(A.1, A.2); B.2 = B.1;"))
+   (formula-parser "A.1 = 2; A.2 = A.1 + 5; B.1 = SUM(A.1, A.2); B.2 = B.1;"))
 
   ;; => #com.stuartsierra.dependency.MapDependencyGraph{:dependencies {[:cellref "A" "2"] #{[:cellref "A" "1"]}, [:cellref "B" "1"] #{[:cellref "A" "1"] [:cellref "A" "2"]}, [:cellref "B" "2"] #{[:cellref "B" "1"]}}, :dependents {[:cellref "A" "1"] #{[:cellref "A" "2"] [:cellref "B" "1"]}, [:cellref "A" "2"] #{[:cellref "B" "1"]}, [:cellref "B" "1"] #{[:cellref "B" "2"]}}}
 
   ;; Note that A.3 does not appear in the graph. Basically we don't care about the evaluation order of A.3.
   (visualize-dependencies (cell-deps
-                            (formula-parser "A.1 = 2; A.2 = A.1 + 5; B.1 = SUM(A.1, A.2); B.2 = B.1;")))
+                           (formula-parser "A.1 = 2; A.2 = A.1 + 5; B.1 = SUM(A.1, A.2); B.2 = B.1;")))
   ;; => {"A.1" ["A.2" "B.3" "B.1"], "A.2" ["B.1"], "B.1" ["B.2"], "B.2" ["B.3"], "B.3" []}
 
   (visualize-dependencies (cell-deps
-                            (formula-parser "C.1 = SUM(A.1:A.3); A.1=A.2; A.3=A.4+A.2;")))
+                           (formula-parser "C.1 = SUM(A.1:A.3); A.1=A.2; A.3=A.4+A.2;")))
 
   (get-eval-order (cell-deps (formula-parser "A.1 = 2; A.2 = A.1 + 5; B.1 = SUM(A.1, A.2); B.2 = B.1;")))
 ;; => ([:cellref "A" "1"] [:cellref "A" "2"] [:cellref "B" "1"] [:cellref "B" "2"] [:cellref "B" "3"])
@@ -193,34 +183,39 @@
         eval-order (get-eval-order (cell-deps parse-tree))]
     [parse-tree eval-order])
   ;; => [[:prog [:assign [:cellref "A" "1"] [:number "2"]] [:assign [:cellref "A" "2"] [:add [:cellref "A" "1"] [:number "5"]]] [:assign [:cellref "B" "1"] [:funcall "SUM" [:arglist [:cellref "A" "1"] [:cellref "A" "2"]]]] [:assign [:cellref "B" "2"] [:cellref "B" "1"]]] ([:cellref "A" "1"] [:cellref "A" "2"] [:cellref "B" "1"] [:cellref "B" "2"])]
-
-  ,)
-
+  )
 
 (def custom-functions
   {"SUM"    +
    "SQRT"   #(Math/sqrt %)
-   "CONCAT" str})
+   "CONCAT" str
+   "TOINT" #(int %)
+   "CEIL" #(Math/ceil %)
+   "FLOOR" #(Math/floor %)})
 
 (defn lookup-cell-fn [model]
   (fn lookup-cell
     ([col row]
-     (println "lookup-cell: " (str col "." row) ", returned: " (@model (str col "." row)))
+     ;;(println "lookup-cell: " (str col "." row) ", returned: " (@model (str col "." row)))
      (@model (str col "." row)))
     ([[_ col row]]
-     (println "lookup-cell 2nd called")
+     ;;(println "lookup-cell 2nd called")
      (lookup-cell col row))))
 
 (defn call-function
   "Form of the second argument: [:arglist 80 54]. So we destructure here and drop the first item"
   [funname [_ & args :as orig-args]]
-  (println "call-function:" funname "with" orig-args "args = " args)
-  (apply (custom-functions funname) (flatten args)))
+  ;;(println "call-function:" funname "with" orig-args "args = " args)
+  (let [function (custom-functions (str/upper-case funname))]
+    ;;(println "call-function:" funname "with" orig-args "args = " args)
+    (if (nil? function)
+      (throw (Exception. (str "Cannot find custom function by name: " funname)))
+      (apply function (flatten args)))))
 
 (defn get-transform-map [model]
   {:number         #(Integer/parseInt %)
    :add            (fn [& args]
-                     (println "+ called with : " args)
+                     ;;(println "+ called with : " args)
                      (apply + args))
    :sub            -
    :mult           *
@@ -232,13 +227,13 @@
    :prog           identity
    :cellref-assign #(str %1 "." %2)
    :assign         (fn [k v]
-                     (println "Called assign with : " k ": " v)
-                     (swap! model assoc k v))
-   })
+                     (swap! model assoc k v))})
 
 (defn eval-tree [parse-tree initial-model]
   "Evaluates a parse tree with supplied model."
   (let [model              (atom initial-model)
+        ;;_ (insta/visualize parse-tree)
+        ;;_ (visualize-dependencies (cell-deps parse-tree))
         eval-order         (get-eval-order (cell-deps parse-tree))
         eval-order-map     (apply hash-map (interleave eval-order (range (count eval-order))))
         statements         (filter #(and (vector? %) (= :assign (first %))) parse-tree)
@@ -249,13 +244,11 @@
         transform-map      (get-transform-map model)]
     (doall (map (fn [assign]
                   (postwalk
-                    (fn [node]
-                      (if (vector? node)
-                        (let [f (transform-map (first node))
-                              _ (println "Evaluating " node "with " f)]
-                          (if f (apply f (rest node)) node))
-                        node)
-                      ) assign))
+                   (fn [node]
+                     (if (vector? node)
+                       (let [f (transform-map (first node))]
+                         (if f (apply f (rest node)) node))
+                       node)) assign))
                 ordered-statements))
     @model))
 
@@ -263,9 +256,31 @@
   ;; Model is a map here.
   (def test-model {"A.1" 1 "A.2" 2 "A.3" 3 "A.4" 4
                    "B.1" 5 "B.2" 6 "B.3" 7 "B.4" 8})
+  
+  (formula-parser "C.4=SUM(B.3,B.4);B.4=B.3;D.7=SUM(C.4:C.6);C.5=C.4 - 10;A.1=1;B.3=A.1;C.6=SQRT(C4+C.5);")
 
   (eval-tree (formula-parser "A.2= 5;C.1 = SUM(A.1:A.3); A.1=A.2; A.3=A.4+A.2;") test-model)
 ;; => {"B.4" 8, "A.2" 5, "B.1" 5, "A.1" 5, "B.2" 6, "A.4" 4, "A.3" 9, "B.3" 7, "C.1" 19}
+  )
 
+(defn eval-program [prog grid]
+  (let [tree (formula-parser prog)]
+    (if (insta/failure? tree)
+      (throw (Exception. (str "Parse error.\n" (pr-str (insta/get-failure tree)))))
+      (eval-tree tree grid))))
 
+(comment
+  (insta/visualize (formula-parser "B.4=SUM(A.1,C.2);A.2=3;A.5=A.2;C.5=B.4-A.1;D.4=SUM(A.5:D.5);B.1=2;A.1=1;B.2=4;D.5=SUM(A.4:A.5);A.4=A.1+B.2;B.5=D.1-A.1;D.1=4;C.1=3;"))
+  (eval-program "B.4=SUM(A.1,C.2);A.2=3;A.5=A.2;C.5=B.4-A.1;D.4=SUM(A.5:D.5);B.1=2;A.1=1;B.2=4;D.5=SUM(A.4:A.5);A.4=A.1+B.2;B.5=D.1-A.1;D.1=4;C.1=3;"
+                {"A.2" 3
+                 "B.1" 2
+                 "A.1" 1
+                 "B.2" 4
+                 "D.1" 4
+                 "C.1" 3})
+  
+  (eval-program "C.3=TOINT(SQRT(A.1:C.1));B.1=2;A.1=1;C.1=3;"
+                {"B.1" 2
+                 "A.1" 1
+                 "C.1" 3})
   ,)
