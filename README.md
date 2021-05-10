@@ -1,4 +1,6 @@
-# efev
+# formula (Back end) - Demo only
+
+Back end for evaluating formulas represented as programs for a excel-like front end
 
 FIXME: my new application.
 
